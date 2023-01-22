@@ -1,8 +1,14 @@
 //! File format constants.
 #![allow(dead_code)]
 
+/// Data folder for Aquanox
+pub const AQUANOX_DATA_PATH: &str = "dat";
+
+/// Default output directory
+pub const OUT_DIR: &str = "out";
+
 /// PAK file extension.
-pub const PAK_EXT: &str = "pak";
+pub const PAK_EXT: &str = ".pak";
 
 /// Header of the PAK file.
 /// It must always be in the Massive Development format.

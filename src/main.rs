@@ -1,18 +1,18 @@
+use std::error::Error;
 use std::ffi::CStr;
 use std::fs;
-use std::io::{Cursor, Read, SeekFrom};
-use std::{error::Error, io::Seek};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use env_logger::Env;
-use log::{debug, info};
+use log::{debug, info, trace};
 
 mod constants;
 mod dencrypt;
 
 use crate::constants::*;
-
-const FILE_PATH: &str = r#"dat/pak/aquanox1.pak"#;
 
 /// Header that describes a file inside the PAK.
 struct FileInfo {
@@ -31,15 +31,55 @@ fn main() -> Result<(), Box<dyn Error>> {
     debug_assert_eq!(KEY_3.len(), KEY_LENGTH);
 
     info!("Starting...");
+    let start_time = Instant::now();
+
+    let mut pak_paths = Vec::new();
+    walk_pak_files(AQUANOX_DATA_PATH, &mut pak_paths)?;
+
+    for pak_path in pak_paths {
+        process_pak(pak_path)?;
+    }
+
+    let elapsed = Instant::now() - start_time;
+    info!("Time elapsed: {:.4} seconds", elapsed.as_secs_f64());
+    info!("Done.");
+
+    Ok(())
+}
+
+/// Walk the given directory's children, and collect every
+/// filesystem path that matches the expected PAK file extension.
+fn walk_pak_files<P: AsRef<Path>>(path: P, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
+    let path = path.as_ref();
+    let walker = walkdir::WalkDir::new(path);
+
+    for entry in walker {
+        let dir_entry = entry?;
+        let path = dir_entry.path();
+        let file_name = dir_entry.file_name().to_str().unwrap();
+        if file_name.ends_with(PAK_EXT) && path.is_file() {
+            info!("Found {}", path.display());
+            out.push(path.to_owned());
+        } else {
+            trace!("Found {}", path.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn process_pak<P: AsRef<Path>>(pak_path: P) -> Result<(), Box<dyn Error>> {
+    let pak_path = pak_path.as_ref();
+    trace!("Processing {:?}", pak_path.display());
 
     // Open PAK file
-    let pak_file = fs::read(FILE_PATH)?;
+    let pak_file = fs::read(pak_path)?;
     let mut reader = Cursor::new(pak_file.as_slice());
 
     // Check file header
     {
         let file_header = &pak_file[0..PAK_HEADER.len()];
-        debug!("File Header: {:X?}", file_header);
+        trace!("File Header: {:X?}", file_header);
 
         if file_header != PAK_HEADER {
             let file_header_str = CStr::from_bytes_with_nul(file_header)?;
@@ -53,9 +93,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let revision = reader.read_u16::<LittleEndian>()? as usize;
     let file_count = reader.read_u32::<LittleEndian>()? as usize;
 
-    info!("Version: {}", version);
-    info!("Revision: {}", revision);
-    info!("File Count: {}", file_count);
+    debug!("Version: {}", version);
+    debug!("Revision: {}", revision);
+    debug!("File Count: {}", file_count);
 
     assert_eq!(
         version, PAK_FORMAT_VERSION,
@@ -68,14 +108,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let buf = &mut [0u8; COPYRIGHT_LEN];
         reader.read_exact(buf)?;
 
-        debug!("Copyright Bytes: {:X?}", buf);
+        trace!("Copyright Bytes: {:X?}", buf);
 
         let part1 = CStr::from_bytes_with_nul(&buf[0..COPYRIGHT_1_LEN])?.to_string_lossy();
         let part2 =
             CStr::from_bytes_with_nul(&buf[COPYRIGHT_1_LEN..COPYRIGHT_1_LEN + COPYRIGHT_2_LEN])?
                 .to_string_lossy();
 
-        info!("PAK File Copyright Notice: \"{} {}\"", part1, part2);
+        debug!("PAK File Copyright Notice: \"{} {}\"", part1, part2);
     }
 
     debug_assert_eq!(
@@ -100,9 +140,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             // Decrypt Size
             let i: usize = match revision {
-                _ if revision <= 1 => index,
-                _ if revision == 2 => index.wrapping_sub(3), // index - 3
-                _ if revision == 3 => todo!("((-0x1d) - (0x1f * index)) ^ (-0x1b)"),
+                0 | 1 => index,
+                2 => index.wrapping_sub(3), // index - 3
+                3 => todo!("((-0x1d) - (0x1f * index)) ^ (-0x1b)"),
                 _ => unreachable!("unsupported revision"),
             };
 
@@ -110,7 +150,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let k_parts: [u8; FILE_SIZE_LEN] = [KEY_2[j], KEY_2[j + 1], KEY_2[j + 2], KEY_2[j + 3]];
             let k = u32::from_le_bytes(k_parts);
             let file_size = file_size - k;
-            debug!("[{}:{:08X}] File size: {} Bytes", index, offset, file_size);
+            trace!("[{}:{:08X}] File size: {} Bytes", index, offset, file_size);
 
             // Decrypt Filename
             let file_name = {
@@ -130,17 +170,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
 
                 let filename = CStr::from_bytes_with_nul(&file_name)?;
-                debug!(
+                trace!(
                     "[{}:{:08X}] Decrypted filename: {:?}",
-                    index, offset, filename
+                    index,
+                    offset,
+                    filename
                 );
 
                 filename.to_str()?.to_owned()
             };
-
-            // if index == 0 {
-            //     debug!("[{}] File {}Bytes: {:X?}", index, file_size, buf);
-            // }
 
             file_infos.push(FileInfo {
                 offset: offset as usize,
@@ -153,23 +191,32 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     {
-        let mut buf = Vec::<u8>::with_capacity(1024 * 1024);
+        let mut buf = Vec::<u8>::new();
+        let mut root = std::env::current_dir()?;
+        root.push(OUT_DIR);
 
         for file_info in &file_infos {
             // debug!("Offset {:08X}:", reader.position());
-
-            info!("{:08X} {}", file_info.offset, file_info.name);
+            debug!("{:08X} {}", file_info.offset, file_info.name);
 
             buf.resize(file_info.size, 0u8);
             reader.read_exact(&mut buf)?;
 
             // debug!("File Bytes: {:X?}", buf);
 
+            let mut out_path = root.clone();
+            out_path.push(&file_info.name);
+
+            if let Some(parent_path) = out_path.parent() {
+                fs::create_dir_all(parent_path)?;
+            }
+
+            let mut asset_file = std::fs::File::create(out_path)?;
+            asset_file.write_all(&buf)?;
+
             buf.clear();
         }
+
+        Ok(())
     }
-
-    info!("Done.");
-
-    Ok(())
 }

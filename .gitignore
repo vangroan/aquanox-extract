@@ -42,3 +42,4 @@ Cargo.lock
 
 # scratch files
 dat/
+out/
