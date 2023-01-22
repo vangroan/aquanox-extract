@@ -99,36 +99,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             let file_size = reader.read_u32::<LittleEndian>()?;
 
             // Decrypt Size
-            let mut j: usize = 0;
-            if revision <= 1 {
-                j = index;
-            } else if revision == 2 {
-                j = index.wrapping_sub(3);
-            } else if revision == 3 {
-                j = todo!(); // ((-0x1d) - (0x1f * index)) ^ (-0x1b);
-            } else {
-                unreachable!("unsupported revision");
-            }
-            j = j % (KEY_LENGTH - 4);
-            let el: [u8; FILE_SIZE_LEN] = [KEY_2[j], KEY_2[j + 1], KEY_2[j + 2], KEY_2[j + 3]];
-            let el = u32::from_le_bytes(el);
-            let file_size = file_size - el;
+            let i: usize = match revision {
+                _ if revision <= 1 => index,
+                _ if revision == 2 => index.wrapping_sub(3), // index - 3
+                _ if revision == 3 => todo!("((-0x1d) - (0x1f * index)) ^ (-0x1b)"),
+                _ => unreachable!("unsupported revision"),
+            };
+
+            let j = i % (KEY_LENGTH - 4);
+            let k_parts: [u8; FILE_SIZE_LEN] = [KEY_2[j], KEY_2[j + 1], KEY_2[j + 2], KEY_2[j + 3]];
+            let k = u32::from_le_bytes(k_parts);
+            let file_size = file_size - k;
             debug!("[{}:{:08X}] File size: {} Bytes", index, offset, file_size);
 
             // Decrypt Filename
             let file_name = {
                 let mut file_name = Vec::<u8>::with_capacity(FILE_NAME_LEN);
-
-                let mut j: usize = 0;
-                if revision <= 1 {
-                    j = index;
-                } else if revision == 2 {
-                    j = index.wrapping_sub(3);
-                } else if revision == 3 {
-                    j = todo!(); // ((-0x1d) - (0x1f * index)) ^ (-0x1b);
-                } else {
-                    unreachable!("unsupported revision");
-                }
 
                 for x in 0..FILE_NAME_LEN {
                     let c = buf[x];
@@ -137,11 +123,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         break;
                     }
 
-                    let k = (j + x) & (KEY_LENGTH - 1);
-                    let el: u8 = KEY_2[k];
+                    let j = (i + x) & (KEY_LENGTH - 1);
+                    let k: u8 = KEY_2[j];
 
-                    file_name.push((c as u8).wrapping_sub(el));
-                    // file_name.push(c as u8 - el);
+                    file_name.push((c as u8).wrapping_sub(k)); // c - k
                 }
 
                 let filename = CStr::from_bytes_with_nul(&file_name)?;
