@@ -38,8 +38,8 @@ impl Decrypter {
         // Decrypt Size
         let i: u32 = match self.revision {
             0 | 1 => file_index,
-            2 => file_index.wrapping_sub(3), // index - 3
-            3 => todo!("((-0x1d) - (0x1f * file_index)) ^ (-0x1b)"),
+            2 => file_index.wrapping_sub(3).wrapping_add(0x68), // index - 3 + 0x68
+            3 => todo!("(0x41 + (index * 0x0d)) ^ 0x1b74"),
             _ => unreachable!("unsupported revision"),
         };
 
@@ -58,14 +58,21 @@ impl Decrypter {
         let file_name = {
             let mut name_bytes = Vec::<u8>::with_capacity(FILE_NAME_LEN);
 
+            let i: u32 = match self.revision {
+                0 | 1 => file_index,
+                2 => file_index.wrapping_sub(3), // index - 3
+                3 => todo!("((-0x1d) - (0x1f * index)) ^ (-0x1b)"),
+                _ => unreachable!("unsupported revision"),
+            };
+
             for x in 0..FILE_NAME_LEN {
                 let c = file_name_cipher[x];
                 if c == NULL_BYTE {
-                    name_bytes.push(0);
+                    name_bytes.push(NULL_BYTE);
                     break;
                 }
 
-                let j = (i + x as u32) & (KEY_LENGTH - 1);
+                let j = (i.wrapping_add(x as u32)) & (KEY_LENGTH - 1); // (i - x) & (0x40 - 1)
                 let k: u8 = KEY_2[j as usize];
 
                 name_bytes.push((c as u8).wrapping_sub(k)); // c - k

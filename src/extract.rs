@@ -30,7 +30,7 @@ pub fn extract_pak<P: AsRef<Path>>(pak_path: P) -> Result<()> {
     let pak_file = std::fs::read(pak_path)?;
     let mut reader = Cursor::new(pak_file.as_slice());
 
-    // Validate that the file has the expected header idetifying the format.
+    // Validate that the file has the expected header identifying the format.
     check_file_header(&mut reader, &pak_file)?;
 
     // Extract values required to make further extraction decisions.
@@ -47,7 +47,7 @@ pub fn extract_pak<P: AsRef<Path>>(pak_path: P) -> Result<()> {
     }
 
     if revision > 3 {
-        return Err(anyhow!("revision must be 0, 1, 2 or 3"));
+        return Err(anyhow!("revision must be 0, 1, 2 or 3: found {}", revision));
     }
 
     // Skip cursor over copyright section.
@@ -87,9 +87,24 @@ fn extract_copyright(reader: &mut ByteCursor) -> Result<()> {
     trace!("Copyright Bytes: {:X?}", buf);
 
     let part1 = CStr::from_bytes_with_nul(&buf[0..COPYRIGHT_1_LEN])?.to_string_lossy();
-    let part2 = CStr::from_bytes_with_nul(&buf[COPYRIGHT_1_LEN..COPYRIGHT_1_LEN + COPYRIGHT_2_LEN])?.to_string_lossy();
 
-    debug!("PAK File Copyright Notice: \"{} {}\"", part1, part2);
+    // In revision 2 the second part is all null bytes.
+    let part2 = {
+        let bytes = &buf[COPYRIGHT_1_LEN..COPYRIGHT_1_LEN + COPYRIGHT_2_LEN];
+
+        // Check whether any of the characters, except the last one, is null.
+        if bytes[0..COPYRIGHT_2_LEN - 1].iter().any(|b| *b == NULL_BYTE) {
+            "".into()
+        } else {
+            CStr::from_bytes_with_nul(&buf[COPYRIGHT_1_LEN..COPYRIGHT_1_LEN + COPYRIGHT_2_LEN])?.to_string_lossy()
+        }
+    };
+
+    if part2.is_empty() {
+        debug!("PAK File Copyright Notice: \"{}\"", part1);
+    } else {
+        debug!("PAK File Copyright Notice: \"{} {}\"", part1, part2);
+    }
 
     Ok(())
 }
