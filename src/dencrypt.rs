@@ -35,6 +35,10 @@ impl Decrypter {
         file_size_cipher: u32,
         byte_offset: u64,
     ) -> Result<(usize, String)> {
+        if self.revision > PAK_FORMAT_REVISION_MAX {
+            return Err(anyhow!("unsupported pak revision: {}", self.revision));
+        }
+
         // Decrypt Size
         let i: u32 = match self.revision {
             0 | 1 => file_index,
@@ -78,15 +82,15 @@ impl Decrypter {
                 name_bytes.push((c as u8).wrapping_sub(k)); // c - k
             }
 
-            let filename = CStr::from_bytes_with_nul(&name_bytes)?;
+            let name_str = CStr::from_bytes_with_nul(&name_bytes)?;
             trace!(
                 "[{}:{:08X}] Decrypted filename: {:?}",
                 file_index,
                 byte_offset,
-                filename
+                name_str
             );
 
-            filename.to_str()?.to_owned()
+            name_str.to_str()?.to_owned()
         };
 
         Ok((file_size as usize, file_name))

@@ -20,6 +20,9 @@ pub const PAK_HEADER: &[u8] = b"MASSIVEFILE\0";
 /// Version will always be 3
 pub const PAK_FORMAT_VERSION: usize = 3;
 
+/// Only revisions 0-3 are supported
+pub const PAK_FORMAT_REVISION_MAX: usize = 3;
+
 /// Byte count of copyright notice.
 ///
 /// Each file contains the same copyright notice.
